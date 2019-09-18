@@ -30,7 +30,7 @@ let posts = [{
     id: '12',
     title: 'Programming Music',
     body: 'Hello World',
-    published: false,
+    published: true,
     author: '666'
 }]
 

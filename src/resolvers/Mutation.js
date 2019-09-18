@@ -1,7 +1,7 @@
 import uuid from "uuid/v4"
 
 const Mutation = {
-    createUser: (parent, args, {db}, info) => {            
+    createUser: (parent, args, { db, pubsub }, info) => {            
         const emailTaken = db.blogUsers.some((currentUser) => {
             return currentUser.email === args.data.email
         })
@@ -15,7 +15,7 @@ const Mutation = {
         db.blogUsers.push(newUser)
         return newUser
     },
-    deleteUser(parent, args, {db}, info) {
+    deleteUser(parent, args, { db, pubsub }, info) {
         const userIndex = db.blogUsers.findIndex((currentUser) => currentUser.id === args.id)
         if(userIndex === -1)
             throw new Error("No such user")
@@ -33,7 +33,7 @@ const Mutation = {
         db.comments = db.comments.filter((comment) => comment.author !== args.id)
         return deletedUser
     },
-    updateUser(parent, args, { db }, info) {
+    updateUser(parent, args, { db, pubsub }, info) {
         const { id, data } = args
         const user = db.blogUsers.find((user) => user.id === id)
 
@@ -76,21 +76,34 @@ const Mutation = {
         console.log(newPost)
         if(newPost.published)
             pubsub.publish(`post-channel`, {
-                post:newPost
+                post:{
+                    mutation: 'CREATED',
+                    data: newPost
+                }
             })
         return newPost
     },
-    deletePost(parent, args, {db}, info) {
+    deletePost(parent, args, {db, pubsub}, info) {
         const postIndex = db.posts.findIndex((post) => post.id === args.id)
         if(postIndex === -1)
             throw new Error("No such post")
         const [deletedPost] = db.posts.splice(postIndex,1)
         db.comments = db.comments.filter((comment) => comment.post !== args.id)
+
+        if (deletedPost.published) {
+            pubsub.publish(`post-channel`, {
+                post: {
+                    mutation: 'DELETED',
+                    data: deletedPost
+                }
+            })
+        }
         return deletedPost
     },
-    updatePost(parent, args, { db }, info) {
+    updatePost(parent, args, { db, pubsub }, info) {
         const { id, data } = args
         const post = db.posts.find((post) => post.id === id)
+        const originalPost = { ...post }
 
         if (!post) {
             throw new Error('Post not found')
@@ -106,6 +119,29 @@ const Mutation = {
 
         if (typeof data.published === 'boolean') {
             post.published = data.published
+
+            if (originalPost.published && !post.published) {
+                pubsub.publish(`post-channel`, {
+                    post: {
+                        mutation: 'DELETED',
+                        data: originalPost
+                    }
+                })
+            } else if (!originalPost.published && post.published) {
+                pubsub.publish(`post-channel`, {
+                    post: {
+                        mutation: 'CREATED',
+                        data: post
+                    }
+                })
+            }
+        } else if (post.published) {
+            pubsub.publish(`post-channel`, {
+                post: {
+                    mutation: 'UPDATED',
+                    data: post
+                }
+            })
         }
 
         return post
@@ -128,18 +164,27 @@ const Mutation = {
 
         db.comments.push(newComment)
         pubsub.publish(`comment-channel-${args.data.post}`, {
-            comment:newComment
+            comment: {
+                mutation: 'CREATED',
+                data: comment
+            }
         })
         return newComment
     },
-    deleteComment(parent, args, {db}, info) {
+    deleteComment(parent, args, { db, pubsub }, info) {
         const commentIndex = db.comments.findIndex((comment) => comment.id === args.id)
         if(commentIndex === -1)
             throw new Error("No such comment")
         const [deletedComment] = db.comments.splice(commentIndex,1)
+        pubsub.publish(`comment-channel-${deletedComment.post}`, {
+            comment: {
+                mutation: 'DELETED',
+                data: deletedComment
+            }
+        })
         return deletedComment
     },
-    updateComment(parent, args, { db }, info) {
+    updateComment(parent, args, { db, pubsub }, info) {
         const { id, data } = args
         const comment = db.comments.find((comment) => comment.id === id)
 
@@ -150,6 +195,13 @@ const Mutation = {
         if (typeof data.text === 'string') {
             comment.text = data.text
         }
+
+        pubsub.publish(`comment-channel-${comment.post}`, {
+            comment: {
+                mutation: 'UPDATED',
+                data: comment
+            }
+        })
 
         return comment
     }
